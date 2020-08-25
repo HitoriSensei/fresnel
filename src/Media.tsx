@@ -1,10 +1,10 @@
 // tslint:disable:jsdoc-format
 
 import React from "react"
+import { BreakpointKey } from "./Breakpoints"
 import { createResponsiveComponents } from "./DynamicResponsive"
 import { MediaQueries } from "./MediaQueries"
-import { intersection, propKey, createClassName } from "./Utils"
-import { BreakpointKey } from "./Breakpoints"
+import { createClassName, intersection, propKey } from "./Utils"
 
 /**
  * A render prop that can be used to render a different container element than
@@ -182,6 +182,15 @@ export interface MediaProps<B, I> extends MediaBreakpointProps<B> {
    * Additional classNames to passed down and applied to Media container
    */
   className?: string
+
+  /**
+   * Use React Fragments to render instead of container.
+   * This is an **EXPERIMENTAL** feature that requires all child components
+   * to apply the `className` prop that will contain the required breakpoint
+   * class. Text nodes will automatically be wrapped with a span that applies
+   * the breakpoint.
+   */
+  fragment?: boolean
 }
 
 export interface MediaContextProviderProps<M> {
@@ -380,18 +389,20 @@ export function createMedia<
           {({ onlyMatch } = {}) => {
             let className: string | null
             const {
+              at: atBreakpoint,
               children,
               className: passedClassName,
+              fragment,
               interaction,
               ...breakpointProps
             } = props
-            if (props.interaction) {
-              className = createClassName("interaction", props.interaction)
+            if (interaction) {
+              className = createClassName("interaction", interaction)
             } else {
-              if (props.at) {
+              if (atBreakpoint) {
                 const largestBreakpoint =
                   mediaQueries.breakpoints.largestBreakpoint
-                if (props.at === largestBreakpoint) {
+                if (atBreakpoint === largestBreakpoint) {
                   // TODO: We should look into making React’s __DEV__ available
                   //       and have webpack completely compile these away.
                   let ownerName = null
@@ -422,6 +433,9 @@ export function createMedia<
               className = createClassName(type, breakpoint)
             }
 
+            // Add the user specified class to the generated class name
+            if (passedClassName) className = `${passedClassName} ${className}`
+
             const renderChildren =
               onlyMatch === undefined ||
               mediaQueries.shouldRenderMediaQuery(
@@ -429,12 +443,50 @@ export function createMedia<
                 onlyMatch
               )
 
-            if (props.children instanceof Function) {
-              return props.children(className, renderChildren)
+            if (children instanceof Function) {
+              // Function render: Receives the generated classes, should render flag
+              return children(className, renderChildren)
+            } else if (fragment) {
+              // Fragment render: Apply generated classes over children.
+              // ** WARNING: This is an EXPERIMENTAL feature! **
+              // All children components **must** apply the `className` prop
+              // passed to it, otherwise you may receive hydration warnings
+              // and unexpected behavior, such as elements that are supposed to
+              // be hidden showing during page load before hydration occurs!
+              return (
+                <React.Fragment>
+                  {!renderChildren
+                    ? null
+                    : React.Children.map(children, (child: React.ReactNode) => {
+                        // Handle non-element components that need to render
+                        if (child === undefined || child === null) {
+                          return null
+                        } else if (child instanceof Function) {
+                          return child(className, renderChildren)
+                        } else if (typeof child !== "object") {
+                          return (
+                            <span className={className || undefined}>
+                              {child}
+                            </span>
+                          )
+                        }
+
+                        // Clone elements with our classes added
+                        const el = child as React.ReactElement
+                        const childClass = el.props.className
+                        return React.cloneElement(el, {
+                          className: childClass
+                            ? `${childClass} ${className}`
+                            : className,
+                        })
+                      })}
+                </React.Fragment>
+              )
             } else {
+              // Container render: Creates a container around elements
               return (
                 <div
-                  className={`fresnel-container ${className} ${passedClassName}`}
+                  className={`fresnel-container ${className}`}
                   suppressHydrationWarning={!renderChildren}
                 >
                   {renderChildren ? props.children : null}
